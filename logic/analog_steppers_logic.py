@@ -31,23 +31,26 @@ import time
 
 class AnalogSteppersLogic(GenericLogic):
     """
-    Control xyz steppers via "analog input"
+    Control xyz steppers via a joystick controller
+
+    The idea is to use joystick axis to control the setpoint position (continuous value) and execute steps based on the
+    discretisation of the space.
     """
     _modclass = 'analogstepperslogic'
     _modtype = 'logic'
 
     # declare connectors
     hardware = Connector(interface='SteppersInterface')
-    _ui_frequency = ConfigOption('ui_frequency', 10)
+    joystick = Connector(interface='JoystickLogic')
+
     _hardware_frequency = ConfigOption('hardware_frequency', 1000)
-    _hardware_voltage = ConfigOption('hardware_voltage', 40)
-    _axis = ConfigOption('axis', ('x', 'y', None))
+    _hardware_voltage = ConfigOption('hardware_voltage', 30)
+    _axis = ConfigOption('axis', ('x', 'y', 'z'))
+    _xy_max_velocity = ConfigOption('xy_max_velocity', 100) # the maximum number of steps by second
 
-    # signals
-    sigUpdate = QtCore.Signal()
-    timer = None
+    _joystick_setpoint_position = np.zeros(3)
+    _hardware_position = np.zeros(3)
 
-    _last_value = [0., .0, .0]
     _enabled = False
 
     def __init__(self, config, **kwargs):
@@ -59,13 +62,18 @@ class AnalogSteppersLogic(GenericLogic):
         """ Initialisation performed during activation of the module.
         """
         self._hardware = self.hardware()
+        self._joystick = self.joystick()
 
-        self.timer = QtCore.QTimer()
-        self.timer.setSingleShot(True)
-        self.timer.timeout.connect(self.loop)
+        self._joystick.sig_new_frame.connect(self.on_new_frame)
+
+        self._joystick.signal_left_up_pushed.connect(lambda: self.discrete_movement((0, 1, 0)))
+        self._joystick.signal_left_down_pushed.connect(lambda: self.discrete_movement((0, -1, 0)))
+        self._joystick.signal_left_left_pushed.connect(lambda: self.discrete_movement((-1, 0, 0)))
+        self._joystick.signal_left_right_pushed.connect(lambda: self.discrete_movement((1, 0, 0)))
+        self._joystick.signal_left_shoulder_pushed.connect(lambda: self.discrete_movement((0, 0, -1)))
+        self._joystick.signal_right_shoulder_pushed.connect(lambda: self.discrete_movement((0, 0, 1)))
 
         self.setup_axis()
-        self.startLoop()
 
     def setup_axis(self):
         """ Set axis as in config file"""
@@ -80,43 +88,55 @@ class AnalogSteppersLogic(GenericLogic):
         pass
 
 
-    def startLoop(self):
-        self._enabled = True
-        self.start_timer()
 
+    def on_new_frame(self):
+        """ Executed function when a new frame from the joystick controller is received """
 
-    def stopLoop(self):
-        self.timer.stop()
-        self._enabled = False
-        self._hardware.stop()
+        state = self._joystick.get_last_state()
+        fps = self._joystick.get_fps()
 
+        y = state['axis']['left_vertical']
+        x = state['axis']['left_horizontal']
 
-    def loop(self):
-        if self._enabled:
-            self.start_timer()
-            self.move()
+        # 1. Let's correct the "deadzone" noise
+        deadzone = 0.05
+        if -0.05 < x < 0.05:
+            x = 0
+        if -0.05 < y < 0.05:
+            y = 0
 
-    def start_timer(self):
-        self.timer.start(int(1000 * 1 / self._ui_frequency))
+        # 2. Let's use a power to add "precision"
+        power = 3.0
+        x = x**power / fps * self._xy_max_velocity
+        y = y**power / fps * self._xy_max_velocity
+        z = 0
 
-    def move(self):
-        for axis in self._axis:
+        self.discrete_movement((x, y, z))
+
+    def discrete_movement(self, relative_movement):
+        """ Function to do a discrete relative movement """
+        self._joystick_setpoint_position += relative_movement
+        self._update_hardware()
+
+    def _update_hardware(self):
+        """ Eventually send command to hardware if position has changed
+        """
+        before = self._hardware_position
+        after = np.floor(self._joystick_setpoint_position)
+
+        difference = after - before
+        changed = False
+        for index, axis in enumerate(self._axis):
             if axis:
-                i = self._axis.index(axis)
-                value = self._last_value[i]
-                self._last_value[i] = 0
-                self.move_axis(axis, value)
+                if difference[int(index)] != 0:
+                    self._hardware.steps(axis, index)
+                    changed = True
+        self._hardware_position = after
+        if changed:
+            self.log.debug('New position ({}, {}, {})'.format(*after))
+#            print('New position ({}, {}, {})'.format(*after)) # print is bad but log.debug is too slow
 
-    def move_axis(self, axis, analog):
-        if analog == 0.:
-            return
-        if analog < -1. or analog > 1:
-            self.log.error('Analog value must be between -1.0 and 1.0 : {}'.format(analog))
-        steps = self._hardware_frequency / self._ui_frequency * analog
-        steps = np.trunc(steps)
-        self._hardware.steps(axis, steps)
 
-    # Because why not
     def hello(self):
         """ Greet humans properly """
 
