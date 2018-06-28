@@ -41,8 +41,16 @@ class JoystickLogic(GenericLogic):
     _fps = _max_fps
 
     # signals
-    sig_controller_changed = QtCore.Signal()
     sig_new_frame = QtCore.Signal()
+    sig_controller_changed = QtCore.Signal()
+
+    signal_left_up_pushed = QtCore.Signal()
+    signal_left_down_pushed = QtCore.Signal()
+    signal_left_left_pushed = QtCore.Signal()
+    signal_left_right_pushed = QtCore.Signal()
+    signal_left_shoulder_pushed = QtCore.Signal()
+    signal_right_shoulder_pushed = QtCore.Signal()
+
 
     timer = None
     enabled = False
@@ -56,7 +64,7 @@ class JoystickLogic(GenericLogic):
     _axis_list = ['left_vertical', 'left_horizontal', 'right_vertical', 'right_horizontal',
                   'left_trigger', 'right_trigger']
 
-    events = None
+    events = {}
 
     def __init__(self, config, **kwargs):
         super().__init__(config=config, **kwargs)
@@ -72,16 +80,14 @@ class JoystickLogic(GenericLogic):
         self.timer.setSingleShot(True)
         self.timer.timeout.connect(self.loop)
 
-        for button in self._button_list:
-            self.events[button] = {
-                'pressed': QtCore.Signal(),
-                'value_change': QtCore.Signal()
-            }
 
-        for axis in self._axis_list:
-            self.events[axis] = {
-                'value_change': QtCore.Signal()
-            }
+
+        #for button in self._button_list:
+            #setattr(self, 'signal_{}_pressed'.format(button), QtCore.Signal())
+            #setattr(self, 'signal_{}_value_change'.format(button), QtCore.Signal())
+
+        #for axis in self._axis_list:
+        #    setattr(self, 'signal_{}_value_change'.format(axis), QtCore.Signal())
 
         self._last_state = self._hardware.get_state()
 
@@ -116,27 +122,34 @@ class JoystickLogic(GenericLogic):
         old_state = self._last_state
         state = self._hardware.get_state()
         changed = False
+        self._last_state = state
 
         if not self.enabled:
             return
 
         for button in self._button_list:
-            if state[button] != old_state[button]:
+            if state['buttons'][button] != old_state['buttons'][button]:
                 changed = True
-                self._events[button]['value_change'].emit()
-                if state[button]:
-                    self._events[button]['pressed'].emit()
+                if state['buttons'][button]:
+                    if hasattr(self, 'signal_{}_pushed'.format(button)):
+                        getattr(self, 'signal_{}_pushed'.format(button)).emit()
 
         for axis in self._axis_list:
-            if state[axis] != old_state[axis]:
+            if state['axis'][axis] != old_state['axis'][axis]:
                 changed = True
-                self._events[axis]['value_change'].emit()
+                #self.emit(QtCore.SIGNAL("{}_value_change").format(button))
+                pass
 
         if changed:
             self.sig_controller_changed.emit()
+        self.sig_new_frame.emit()
 
         self.timer.start(1000 * 1 / self._fps)
 
     def get_last_state(self):
         """ Return last acquired state """
         return self._last_state
+
+    def get_fps(self):
+        """ Return the frequency of controller request """
+        return self._fps
