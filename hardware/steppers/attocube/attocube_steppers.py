@@ -25,6 +25,7 @@ top-level directory of this distribution and at <https://github.com/Ulm-IQO/qudi
 import telnetlib
 import time
 import re
+import visa
 
 from core.module import Base, ConfigOption
 from interface.steppers_interface import SteppersInterface
@@ -42,6 +43,9 @@ class AttoCubeStepper(Base, SteppersInterface):
     _host = ConfigOption('host', None)
     _password = ConfigOption('password', "123456")
     _port = ConfigOption('port', 7230)
+
+    _gpib_address = ConfigOption('gpib_address', None)
+    _gpib_timeout = ConfigOption('gpib_timeout', 10)
 
     _default_axis = {
         'voltage_range': [0, 60],
@@ -96,10 +100,10 @@ class AttoCubeStepper(Base, SteppersInterface):
         """
         if self._interface_type == 'ethernet':
             if self._host is None:
-                self.log.error('Ethernet connection required but no host have been specified')
+                self.log.error('Ethernet connection required but no host have not been specified')
         elif self._interface_type == 'usb':
-            if self._interface is None:
-                self.log.error('Usb connection required but interface have been specified. (ex: COM2)')
+            if self._gpib_address is None:
+                self.log.error('Usb connection required but interface have not been specified. (ex: COM2)')
         else:
             self.log.error("Wrong interface type, option are 'ethernet' or 'usb'")
 
@@ -146,7 +150,17 @@ class AttoCubeStepper(Base, SteppersInterface):
             self.tn.read_very_eager()  # clear the buffer
 
         elif self._interface_type == 'usb':
-            pass  # TODO
+            self.rm = visa.ResourceManager()
+            try:
+                self._gpib_connection = self.rm.open_resource(
+                    self._gpib_address,
+                    timeout=self._gpib_timeout * 1000)
+            except:
+                self.log.error('Could not connect to the controller '
+                               'address >>{}<<.'.format(self._gpib_address))
+                raise
+            self.connected = True
+            self.log.info("Connection to ANC300 was established")
 
     def _disconnect(self, keep_active=False):
         """ Close connection with ANC after setting all axis to ground (except if keep_active is true)
@@ -159,7 +173,8 @@ class AttoCubeStepper(Base, SteppersInterface):
         if self._interface_type == 'ethernet':
             self.tn.close()
         elif self._interface_type == 'usb':
-            pass  # TODO
+            self._gpib_connection.close()
+            self.rm.close()
 
     def _send_cmd(self, cmd, read=True, regex=None, timeout=1):
         """Sends a command to the attocube steppers and parse the response
@@ -186,7 +201,11 @@ class AttoCubeStepper(Base, SteppersInterface):
                     self.log.error("Piezo steppers controller telnet timed out ({} second)".format(timeout))
                     return False
         elif self._interface_type == 'usb':
-            pass
+            try:
+                response = self._gpib_connection.query(full_cmd)
+            except:
+                self.log.error("Piezo steppers controller telnet timed out ({} second)".format(self._gpib_timeout))
+                return False
             return None
 
         # check for error
