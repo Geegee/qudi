@@ -49,6 +49,7 @@ class CameraLogic(GenericLogic):
     enabled = False
 
     _exposure = 1.
+    _gain = 1.
     _last_image = None
     _last_image_raw = None
 
@@ -89,6 +90,17 @@ class CameraLogic(GenericLogic):
         self._exposure = self._hardware.get_exposure()
         self._fps = min(1 / self._exposure, self._max_fps)
         return self._exposure
+
+    def set_gain(self, value):
+        """ Set gain of hardware """
+        self._hardware.set_gain(value)
+        self.get_gain()
+
+    def get_gain(self):
+        """ Get gain of hardware """
+        self._gain = self._hardware.get_gain()
+
+        return self._gain
 
     def startLoop(self):
         """ Start the data recording loop.
